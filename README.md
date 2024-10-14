@@ -1,2 +1,4 @@
 # dolly-rag
-Attempting to use dolly and RAG
+Attemping to use Databricks to setup RAG model.
+
+# links
