@@ -2,7 +2,7 @@
 PYTHON=python3
 VENV=venv
 DRIVER_PATH=/opt/homebrew/bin/chromedriver
-OUTPUT_DIR=./data
+OUTPUT_DIR=./../data
 REQUIREMENTS=requirements.txt
 SCRAPER=scraper.py
 
