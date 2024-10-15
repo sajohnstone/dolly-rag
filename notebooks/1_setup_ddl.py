@@ -33,3 +33,4 @@ spark.sql(f"""
 spark.sql(f"""
     create volume if not exists {catalog_name}.{schema_name}.checkpoints
 """)
+

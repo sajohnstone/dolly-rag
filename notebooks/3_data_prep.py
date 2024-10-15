@@ -148,17 +148,31 @@ df_chunks = (df
 
 # COMMAND ----------
 
-#Write the embeddings as a Delta table
-from pyspark.sql.functions import col, udf, length, pandas_udf, explode
+from pyspark.sql.functions import explode, concat, col, lit
+import uuid
 
-(spark.readStream.table(raw_table_name)
-      .withColumn("content", explode(read_as_chunk("content")))
-      .withColumn("embedding", get_embedding("content"))
-      .selectExpr('path as url', 'content', 'embedding')
-  .writeStream
+# Function to generate UUID
+def generate_uuid():
+    return str(uuid.uuid4())
+
+# Register the function as a UDF
+uuid_udf = spark.udf.register("uuid_udf", generate_uuid)
+
+# Write the embeddings as a Delta table
+(spark.readStream
+    .option("ignoreDeletes", "true")
+    .option("ignoreChanges", "true")
+    .table(raw_table_name)
+    .withColumn("content", explode(read_as_chunk("content")))
+    .withColumn("embedding", get_embedding("content"))
+    .withColumn("id", uuid_udf())
+    .selectExpr('path as url', 'content', 'embedding', 'id')
+    .writeStream
     .trigger(availableNow=True)
     .option("checkpointLocation", encoded_checkpoints_path)
-    .table(encoded_table_name).awaitTermination())
+    .option("mergeSchema", "true")
+    .table(encoded_table_name)
+    .awaitTermination())
 
 # COMMAND ----------
 
