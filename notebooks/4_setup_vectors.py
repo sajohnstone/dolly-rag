@@ -7,7 +7,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet -U databricks-vectorsearch
+# MAGIC %pip install --quiet -U databricks-vectorsearch flashrank
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -16,6 +16,7 @@
 catalog_name = "stu_sandbox"
 schema_name = "rag_model"
 vector_search_endpoint_name = "stu-test-vector"
+model_endpoint_name = "bge_small_en_v1_5"
 
 encoded_table_name = f"{catalog_name}.{schema_name}.silver_pdfs_chunked_encoded"
 encoded_table_name_vs_index = f"{encoded_table_name}_vs_index"
@@ -105,6 +106,7 @@ spark.sql(f"ALTER TABLE {encoded_table_name} SET TBLPROPERTIES (delta.enableChan
 
 # COMMAND ----------
 
+# Setup the vector index with data from the table
 from databricks.vector_search.client import VectorSearchClient
 vsc = VectorSearchClient()
 
@@ -116,7 +118,7 @@ if not index_exists(vsc, vector_search_endpoint_name, encoded_table_name_vs_inde
     source_table_name=encoded_table_name,
     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
     primary_key="id",
-    embedding_dimension=1024, #Match your model embedding size (gte)
+    embedding_dimension=384, ##TODO: Get this from the model_endpoint_name
     embedding_vector_column="embedding"
   )
   #Let's wait for the index to be ready and all our embeddings to be created and indexed
@@ -125,3 +127,36 @@ else:
   #Trigger a sync to update our vs content with the new data saved in the table
   wait_for_index_to_be_ready(vsc, vector_search_endpoint_name, encoded_table_name_vs_index)
   vsc.get_index(vector_search_endpoint_name, encoded_table_name_vs_index).sync()
+
+# COMMAND ----------
+
+# Test calculate embedding for this sample query
+import mlflow.deployments
+from databricks.vector_search.client import VectorSearchClient
+from pprint import pprint
+vsc = VectorSearchClient()
+
+question = "how can I check my leave balance?"
+
+deploy_client = mlflow.deployments.get_deploy_client("databricks")
+response = deploy_client.predict(endpoint=model_endpoint_name, inputs={"input": [question]})
+embeddings = [e['embedding'] for e in response.data]
+
+results = vsc.get_index(vector_search_endpoint_name, encoded_table_name_vs_index).similarity_search(
+  query_vector=embeddings[0],
+  columns=["url", "content"],
+  num_results=5)
+
+passages = []
+for doc in results.get('result', {}).get('data_array', []):
+    new_doc = {"file": doc[0], "text": doc[1]}
+    passages.append(new_doc)
+pprint(passages)
+
+## Rerank
+from flashrank import Ranker, RerankRequest
+ranker = Ranker(model_name="rank-T5-flan", cache_dir="/local_disk0/cache")
+rerank_request = RerankRequest(query=question, passages=passages)
+results = ranker.rerank(rerank_request)
+pprint(results)
+
