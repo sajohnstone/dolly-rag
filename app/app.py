@@ -1,19 +1,16 @@
 import logging
 import os
 import streamlit as st
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+import requests
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize the Databricks Workspace Client
-w = WorkspaceClient()
+SERVING_ENDPOINT = "https://adb-3800464929700097.17.azuredatabricks.net/serving-endpoints/stu_rag_model_2/invocations"
 
-# Ensure environment variable is set correctly
-assert os.getenv('SERVING_ENDPOINT'), "SERVING_ENDPOINT must be set in app.yaml."
-
+# Function to get user info from headers
 def get_user_info():
     headers = st.context.headers
     return dict(
@@ -24,13 +21,18 @@ def get_user_info():
 
 user_info = get_user_info()
 
-# Streamlit app
+# Streamlit session state for chat visibility and history
 if "visibility" not in st.session_state:
     st.session_state.visibility = "visible"
     st.session_state.disabled = False
 
-st.title("🧱 Chatbot App")
-st.write(f"A basic chatbot using the your own serving endpoint")
+st.image(
+    "https://mantelgroup.com.au/wp-content/uploads/2023/03/Mantel-Group-Logo-Pride-e1622092187264-1.png", 
+    caption="Mantel Group", 
+    width=300  # Adjust the width to your preference
+)
+st.title("Mantel AI Assistant")
+st.write(f"A basic chatbot using your own serving endpoint")
 
 # Initialize chat history
 if "messages" not in st.session_state:
@@ -41,7 +43,33 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Accept user input
+# Function to query the Databricks serving endpoint
+def query_databricks_endpoint(query):
+    input_data = {"instances": [{"query": query}]}
+
+    # Setup headers for the request
+    access_token = os.getenv('DATABRICKS_CLIENT_SECRET') ##TODO: fix this
+    access_token = "<CHANGEME>"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    # Make the POST request
+    response = requests.post(
+        SERVING_ENDPOINT,
+        headers=headers,
+        data=json.dumps(input_data)
+    )
+
+    # Handle the response
+    if response.status_code == 200:
+        prediction = response.json()
+        return prediction
+    else:
+        raise Exception(f"Error querying model: {response.status_code}, {response.text}")
+
+# Accept user input and interact with the assistant
 if prompt := st.chat_input("What is up?"):
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -49,22 +77,17 @@ if prompt := st.chat_input("What is up?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    messages = [ChatMessage(role=ChatMessageRole.SYSTEM, content="You are a helpful assistant."),
-                ChatMessage(role=ChatMessageRole.USER, content=prompt)]
+    # Query the Databricks serving endpoint
+    try:
+        assistant_response = query_databricks_endpoint(prompt)
+        assistant_message = assistant_response['predictions'][0]
+        
+        # Display assistant response in chat message container
+        with st.chat_message("assistant"):
+            st.markdown(assistant_message)
 
-    # Display assistant response in chat message container
-    with st.chat_message("assistant"):
-        # Query the Databricks serving endpoint
-        try:
-            response = w.serving_endpoints.query(
-                name=os.getenv("SERVING_ENDPOINT"),
-                messages=messages,
-                max_tokens=400,
-            )
-            assistant_response = response.choices[0].message.content
-            st.markdown(assistant_response)
-        except Exception as e:
-            st.error(f"Error querying model: {e}")
+        # Add assistant response to chat history
+        st.session_state.messages.append({"role": "assistant", "content": assistant_message})
 
-    # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+    except Exception as e:
+        st.error(f"Error querying model: {e}")
