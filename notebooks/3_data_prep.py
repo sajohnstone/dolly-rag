@@ -8,7 +8,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet -U transformers==4.41.1 pypdf==4.1.0 langchain-text-splitters==0.2.0 databricks-vectorsearch mlflow tiktoken==0.7.0 torch==2.3.0 llama-index==0.10.43
+# MAGIC %pip install --quiet -U transformers==4.41.1 langchain-text-splitters==0.2.0 databricks-vectorsearch mlflow tiktoken==0.7.0 torch==2.3.0 llama-index==0.10.43
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -21,7 +21,7 @@ username = (
 catalog_name = "stu_sandbox"
 schema_name = "rag_model"
 volume_name = "pdf_data"
-model_endpoint_name = "gte-large-en"
+model_endpoint_name = "bge_small_en_v1_5"
 articles_path = f"/Volumes/{catalog_name}/{schema_name}/{volume_name}/"
 
 raw_table_name = f"{catalog_name}.{schema_name}.bronze_pdfs_raw"
@@ -64,7 +64,6 @@ spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
 # Helper Functions
 
 import warnings
-from pypdf import PdfReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Document, set_global_tokenizer
 from transformers import AutoTokenizer
@@ -74,12 +73,21 @@ import pandas as pd
 import io
 
 #Convert binary pdf to text
-def parse_bytes_pypdf(raw_doc_contents_bytes: bytes):
+#def parse_bytes_pypdf(raw_doc_contents_bytes: bytes):
+#    try:
+#        pdf = io.BytesIO(raw_doc_contents_bytes)
+#        reader = PdfReader(pdf)
+#        parsed_content = [page_content.extract_text() for page_content in reader.pages]
+#        return "\n".join(parsed_content)
+#    except Exception as e:
+#        warnings.warn(f"Exception {e} has been thrown during parsing")
+#        return None
+      
+def parse_bytes_markdown(raw_doc_contents_bytes: bytes) -> str:
     try:
-        pdf = io.BytesIO(raw_doc_contents_bytes)
-        reader = PdfReader(pdf)
-        parsed_content = [page_content.extract_text() for page_content in reader.pages]
-        return "\n".join(parsed_content)
+        # Decode bytes and convert Markdown to plain text
+        markdown_content = raw_doc_contents_bytes.decode('utf-8')
+        return markdown_content
     except Exception as e:
         warnings.warn(f"Exception {e} has been thrown during parsing")
         return None
@@ -92,7 +100,7 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
     )
     splitter = SentenceSplitter(chunk_size=500, chunk_overlap=10)
     def extract_and_split(b):
-      txt = parse_bytes_pypdf(b)
+      txt = parse_bytes_markdown(b)
       if txt is None:
         return []
       nodes = splitter.get_nodes_from_documents([Document(text=txt)])
@@ -128,7 +136,7 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 df = (spark.readStream
         .format('cloudFiles')
         .option('cloudFiles.format', 'BINARYFILE')
-        .option("pathGlobFilter", "*.pdf")
+        .option("pathGlobFilter", "*.md")
         .load(articles_path))
 
 # Write the data as a Delta table

@@ -136,7 +136,7 @@ from databricks.vector_search.client import VectorSearchClient
 from pprint import pprint
 vsc = VectorSearchClient()
 
-question = "how can I check my leave balance?"
+question = "when is christmas shutdown?"
 
 deploy_client = mlflow.deployments.get_deploy_client("databricks")
 response = deploy_client.predict(endpoint=model_endpoint_name, inputs={"input": [question]})
@@ -159,4 +159,3 @@ ranker = Ranker(model_name="rank-T5-flan", cache_dir="/local_disk0/cache")
 rerank_request = RerankRequest(query=question, passages=passages)
 results = ranker.rerank(rerank_request)
 pprint(results)
-

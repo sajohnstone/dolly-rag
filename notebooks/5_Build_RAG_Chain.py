@@ -17,7 +17,7 @@ catalog_name = "stu_sandbox"
 schema_name = "rag_model"
 vector_search_endpoint_name = "stu-test-vector"
 model_endpoint_name = "bge_small_en_v1_5"
-chat_model_endpoint_name = "dbrx_instruct"
+chat_model_endpoint_name = "mixtral_8x7b_instruct_v0_1" ##TODO: Fix issues deploying this "dbrx_instruct"
 our_model_name = "stu_rag_model"
 
 encoded_table_name = f"{catalog_name}.{schema_name}.silver_pdfs_chunked_encoded"
@@ -25,16 +25,33 @@ encoded_table_name_vs_index = f"{encoded_table_name}_vs_index"
 
 # COMMAND ----------
 
+import os
+
+# optional if wanting to set deployed model
+os.environ["DATABRICKS_TOKEN"] = "<change me>"
+os.environ["DATABRICKS_HOST"] = "https://adb-3800464929700097.17.azuredatabricks.net"
+
+# Verify it's set
+print(os.environ["DATABRICKS_TOKEN"])
+print(os.environ["DATABRICKS_HOST"])
+
+# COMMAND ----------
+
 from databricks.vector_search.client import VectorSearchClient
 from langchain.vectorstores import DatabricksVectorSearch
 from langchain.embeddings import DatabricksEmbeddings
+import os
 
 # Define embedding model
 embedding_model = DatabricksEmbeddings(endpoint=model_endpoint_name)
 
 def get_retriever(persist_dir: str = None):
-    # Get the vector search index
-    vsc = VectorSearchClient()
+    #Get the vector search index
+    vsc = VectorSearchClient(workspace_url=os.environ["DATABRICKS_HOST"], 
+     personal_access_token=os.environ["DATABRICKS_TOKEN"],
+     disable_notice=True                  
+    )
+
     vs_index = vsc.get_index(endpoint_name=vector_search_endpoint_name, index_name=encoded_table_name_vs_index) 
 
     # Create the retriever
@@ -154,7 +171,7 @@ display(response_dataset.to_pandas())
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Calcuate Evaluation Metrics
+# MAGIC Calcuate Evaluation Metrics
 
 # COMMAND ----------
 
@@ -188,10 +205,10 @@ display(results.tables['eval_results_table'])
 
 # COMMAND ----------
 
-from mlflow.models import infer_signature
 import mlflow
 import langchain
-
+from mlflow.tracking import MlflowClient
+from mlflow.models import infer_signature
 
 # set model registery to UC
 mlflow.set_registry_uri("databricks-uc")
@@ -212,3 +229,72 @@ with mlflow.start_run(run_name=our_model_name) as run:
         input_example=question,
         signature=signature
     )
+
+# Move the model in production
+client = mlflow.tracking.MlflowClient()
+print(f"Registering model version {model_info.registered_model_version} as production model")
+client.set_registered_model_alias(
+    name=model_name,
+    alias="Production",
+    version=model_info.registered_model_version
+)
+
+# COMMAND ----------
+
+# This might need to be done in the UI as it sometimes errors.
+# TODO: Add env vars to the serving (current doing this via UI)
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
+
+# Initialize the workspace client
+workspace = WorkspaceClient()
+
+# Define the model name and endpoint name
+endpoint_name = our_model_name
+
+# Create the serving endpoint
+status = workspace.serving_endpoints.create_and_wait(
+    name=endpoint_name,
+    config=EndpointCoreConfigInput(
+        served_models=[
+            ServedModelInput(
+                name=our_model_name,
+                model_name=model_name,
+                model_version=model_info.registered_model_version,
+                scale_to_zero_enabled=True,
+                workload_size="Small"
+            )
+        ]
+    )
+)
+
+# Print the status of the endpoint
+print(status)
+
+# COMMAND ----------
+
+# test deployed model
+import json
+import requests
+
+serving_endpoint_url = "https://adb-3800464929700097.17.azuredatabricks.net/serving-endpoints/stu_rag_model_2/invocations"
+input_data = {"instances": [{"query": "when is Christmas shut down?"}]}
+
+# setup header
+access_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+headers = {
+    "Authorization": f"Bearer {access_token}",
+    "Content-Type": "application/json"
+}
+
+response = requests.post(
+    serving_endpoint_url,
+    headers=headers,
+    data=json.dumps(input_data)
+)
+
+if response.status_code == 200:
+    prediction = response.json()
+    print(f"Result: {prediction}")
+else:
+    print(f"Error: {response.status_code}, {response.text}")
